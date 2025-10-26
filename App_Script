@@ -1,0 +1,20 @@
+function doPost(e) {
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    var data = JSON.parse(e.postData.contents);
+
+    sheet.appendRow([
+      new Date(),
+      data.event || "",
+      data.VRL || "",
+      data.Rs || "",
+      data.Ratio || "",
+      data.PPM || "",
+      data.extra || ""
+    ]);
+    return ContentService.createTextOutput("OK");
+  } catch (err) {
+    return ContentService.createTextOutput("ERROR: " + err.toString());
+  }
+}
+
