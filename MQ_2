@@ -1,0 +1,171 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <WiFiManager.h>   // 📡 Library WiFiManager by tzapu
+#include <math.h>
+
+// === Konfigurasi Pin ===
+#define FLAME_PIN 27
+#define MQ_PIN 32
+#define WIFI_LED 26
+#define RL 10.0
+#define Ro 27.4 // ganti  nilai RO
+#define m -0.82593
+#define b 2.74904
+#define SMOKE_THRESHOLD_PPM 1042.0
+
+// === Token & URL ===
+const char* BOT_TOKEN = "zzzzzzzzzzzzzz"; // Bot Token Telegram
+const char* CHAT_ID = "zzzzzzzzz"; // chat id group
+String googleScriptURL = "zzzzzzzzzzz"; //Goglee script url
+
+// === MQTT HiveMQ Cloud (TLS) ===
+const char* mqtt_server = "ZZZZZZZZ"; //Ganti MQTT Seerver
+const int mqtt_port = 8883;
+const char* mqtt_user = "ZZZZZZZZ"; // Ganti MQTT user credentials
+const char* mqtt_pass = "ZZZZZZZZZ"; //Ganti MQTT password credentials
+const char* topic = "ZZZZZZZ"; // MQTT Topic
+ 
+WiFiClientSecure espClient;
+PubSubClient client(espClient);
+
+// === Variabel Status ===
+String lastEvent = "clear";
+unsigned long lastSend = 0;
+const unsigned long SEND_INTERVAL = 2000;
+
+// === Fungsi Telegram ===
+void sendTelegram(String pesan) {
+  if (WiFi.status() != WL_CONNECTED) return;
+  HTTPClient http;
+  String url = "https://api.telegram.org/bot" + String(BOT_TOKEN) + "/sendMessage?chat_id=" + CHAT_ID + "&text=" + pesan;
+  http.begin(url);
+  http.GET();
+  http.end();
+}
+
+// === Fungsi Google Sheet ===
+void sendToGoogle(String event, float ppm) {
+  if (WiFi.status() != WL_CONNECTED) return;
+  HTTPClient http;
+  http.begin(googleScriptURL);
+  http.addHeader("Content-Type", "application/json");
+  String payload = "{\"event\":\"" + event + "\",\"PPM\":" + String(ppm, 2) + "}";
+  int code = http.POST(payload);
+  Serial.print("Google Response: ");
+  Serial.println(code);
+  http.end();
+}
+
+// === Fungsi MQTT TLS ===
+void connectMQTT() {
+  if (!client.connected()) {
+    Serial.println("🔌 Menghubungkan ke HiveMQ Cloud...");
+    while (!client.connected()) {
+      if (client.connect("ESP32_Sensor_Node", mqtt_user, mqtt_pass)) {
+        Serial.println("✅ MQTT TLS Terhubung!");
+        client.subscribe("esp32/command");
+      } else {
+        Serial.print("❌ Gagal, rc=");
+        Serial.print(client.state());
+        Serial.println(" mencoba lagi...");
+        delay(3000);
+      }
+    }
+  }
+}
+
+void sendMQTT(String event) {
+  if (!client.connected()) connectMQTT();
+  client.publish(topic, event.c_str());
+  Serial.println("📤 Kirim ke MQTT TLS: " + event);
+}
+
+// === Callback MQTT ===
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("📥 Pesan dari topic ");
+  Serial.println(topic);
+  Serial.print("Isi: ");
+  for (int i = 0; i < length; i++) Serial.print((char)payload[i]);
+  Serial.println();
+}
+
+// === Setup ===
+void setup() {
+  Serial.begin(115200);
+  pinMode(WIFI_LED, OUTPUT);
+  pinMode(MQ_PIN, INPUT);
+  pinMode(FLAME_PIN, INPUT);
+
+  digitalWrite(WIFI_LED, HIGH); // LED nyala saat belum konek
+
+  // === WiFi Manager ===
+  WiFiManager wm;
+
+  // Jika ingin reset konfigurasi lama (pakai hanya bila perlu):
+  // wm.resetSettings();
+
+  bool res = wm.autoConnect("ESP32_Config", "12345678"); 
+  // SSID = ESP32_Config, password AP = 12345678 (bisa dikosongkan kalau mau open)
+
+  if (!res) {
+    Serial.println("❌ Gagal konek WiFi, restart ESP...");
+    delay(3000);
+    ESP.restart();
+  } else {
+    Serial.println("✅ WiFi Terhubung!");
+    digitalWrite(WIFI_LED, LOW);
+  }
+
+  // Konfigurasi MQTT TLS
+  espClient.setInsecure();  // Gunakan TLS tanpa verifikasi sertifikat (aman untuk test)
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+}
+
+// === Loop ===
+void loop() {
+  // 🔄 Cek koneksi WiFi
+  if (WiFi.status() != WL_CONNECTED) {
+    digitalWrite(WIFI_LED, HIGH);  
+  } else {
+    digitalWrite(WIFI_LED, LOW);   
+  }
+
+  client.loop();
+
+  // === Baca sensor ===
+  int adcValue = analogRead(MQ_PIN);
+  float vrl = adcValue * (3.3 / 4095.0);
+  float rs = RL * ((3.3 / vrl) - 1);
+  float ratio = rs / Ro;
+  float ppm = pow(10, ((log10(ratio) - b) / m));
+  bool flameDetected = digitalRead(FLAME_PIN) == LOW; // 🔥 aktif LOW
+
+  String currentEvent = "clear";
+  if (ppm >= SMOKE_THRESHOLD_PPM) currentEvent = "smoke";
+  else if (flameDetected) currentEvent = "flame";
+
+  if (currentEvent != lastEvent) {
+    lastEvent = currentEvent;
+
+    if (currentEvent == "smoke") {
+      sendTelegram("🚨 Asap terdeteksi! PPM=" + String(ppm, 0));
+      sendToGoogle("smoke", ppm);
+      sendMQTT("smoke");
+    } 
+    else if (currentEvent == "flame") {
+      sendTelegram("🔥 Api terdeteksi!");
+      sendToGoogle("flame", ppm);
+      sendMQTT("flame");
+    } 
+    else if (currentEvent == "clear") {
+      sendTelegram("✅ Kondisi kembali aman.");
+      sendToGoogle("clear", ppm);
+      sendMQTT("clear");
+    }
+  }
+
+  delay(1000);
+}
