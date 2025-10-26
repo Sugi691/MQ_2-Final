@@ -63,6 +63,7 @@ void setup() {
   Serial.begin(115200);
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
+  digitalWrite(WIFI_LED, HIGH);
 
   // === WiFi Manager ===
   WiFiManager wm;
@@ -89,6 +90,11 @@ void setup() {
 
 // === Loop ===
 void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    digitalWrite(LED_WIFI, HIGH);  // WiFi putus → LED nyala
+  } else {
+    digitalWrite(LED_WIFI, LOW);   // WiFi tersambung → LED mati
+  } 
   if (!client.connected()) connectMQTT();
   client.loop();
 
