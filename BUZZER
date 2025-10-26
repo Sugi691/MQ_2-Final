@@ -3,7 +3,7 @@
 #include <PubSubClient.h>
 #include <WiFiManager.h>   // Library WiFiManager by tzapu
 
-#define BUZZER_PIN 16
+#define BUZZER_PIN 16 //sesuaikan pin ESP 32
 
 // === MQTT HiveMQ Cloud (TLS) ===
 const char* mqtt_server = "zzzzzzzzz"; //isi mqtt server
