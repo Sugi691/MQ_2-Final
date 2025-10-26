@@ -1,0 +1,99 @@
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <WiFiManager.h>   // Library WiFiManager by tzapu
+
+#define BUZZER_PIN 16
+
+// === MQTT HiveMQ Cloud (TLS) ===
+const char* mqtt_server = "zzzzzzzzz"; //isi mqtt server
+const int mqtt_port = 8883;
+const char* mqtt_user = "zzzzzzzzz"; //mqtt user kredensial
+const char* mqtt_pass = "zzzzzzzzzz"; //mqtt password kredensial
+const char* topic = "zzzzzzz"; //MQTT topic
+
+WiFiClientSecure espClient;
+PubSubClient client(espClient);
+
+// === Variabel Buzzer ===
+bool alarmActive = false;
+unsigned long alarmStart = 0;
+const unsigned long ALARM_DURATION = 60000; // 60 detik
+
+// === Fungsi Callback MQTT ===
+void callback(char* topic, byte* payload, unsigned int length) {
+  String msg = "";
+  for (int i = 0; i < length; i++) msg += (char)payload[i];
+
+  Serial.println("📩 Pesan dari MQTT: " + msg);
+
+  if (msg == "smoke" || msg == "flame") {
+    Serial.println("🚨 Aktifkan Buzzer!");
+    digitalWrite(BUZZER_PIN, HIGH);
+    alarmActive = true;
+    alarmStart = millis();
+  } 
+  else if (msg == "clear") {
+    Serial.println("✅ Matikan Buzzer!");
+    digitalWrite(BUZZER_PIN, LOW);
+    alarmActive = false;
+  }
+}
+
+// === Fungsi Koneksi MQTT ===
+void connectMQTT() {
+  if (!client.connected()) {
+    Serial.println("🔌 Menghubungkan ke HiveMQ Cloud (TLS)...");
+    while (!client.connected()) {
+      if (client.connect("ESP32_Buzzer_Node", mqtt_user, mqtt_pass)) {
+        Serial.println("✅ Terhubung ke HiveMQ Cloud!");
+        client.subscribe(topic);
+      } else {
+        Serial.print("❌ Gagal, rc=");
+        Serial.print(client.state());
+        Serial.println(" mencoba lagi...");
+        delay(3000);
+      }
+    }
+  }
+}
+
+// === Setup ===
+void setup() {
+  Serial.begin(115200);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  // === WiFi Manager ===
+  WiFiManager wm;
+
+  // Aktifkan AP jika gagal konek WiFi
+  // SSID AP: "ESP32_Config", tanpa password (bisa ubah)
+  bool res;
+  res = wm.autoConnect("ESP32_Config");  
+
+  if (!res) {
+    Serial.println("❌ Gagal terkoneksi ke WiFi, restart ESP...");
+    delay(3000);
+    ESP.restart();
+  } else {
+    Serial.println("✅ WiFi Terhubung!");
+  }
+
+  // Konfigurasi koneksi TLS (tanpa verifikasi sertifikat)
+  espClient.setInsecure();  
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+}
+
+// === Loop ===
+void loop() {
+  if (!client.connected()) connectMQTT();
+  client.loop();
+
+  if (alarmActive && millis() - alarmStart > ALARM_DURATION) {
+    Serial.println("⏱️ Buzzer otomatis dimatikan setelah 10 detik");
+    digitalWrite(BUZZER_PIN, LOW);
+    alarmActive = false;
+  }
+}
